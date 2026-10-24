@@ -1,0 +1,10 @@
+{
+  "name": "Celisafe",
+  "short_name": "Celisafe",
+  "description": "Discover and share celiac-aware restaurant finds with your travel circle.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fbf7fc",
+  "theme_color": "#f7edf7",
+  "categories": ["food", "travel", "health"]
+}
