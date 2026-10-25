@@ -2,10 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 const MAX_RESULTS = 80;
 
-function overpassQuery(latitude: number, longitude: number) {
-  return `[out:json][timeout:20];(node["amenity"~"restaurant|cafe|fast_food"](around:6000,${latitude},${longitude});way["amenity"~"restaurant|cafe|fast_food"](around:6000,${latitude},${longitude}););out center tags ${MAX_RESULTS};`;
-}
-
 async function findWithGoogle(latitude: number, longitude: number) {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return null;
@@ -76,48 +72,56 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const response = await fetch("https://overpass-api.de/api/interpreter", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-        "User-Agent": "Celisafe/1.0 (restaurant discovery)",
-      },
-      body: new URLSearchParams({ data: overpassQuery(latitude, longitude) }),
-      signal: AbortSignal.timeout(25_000),
+    const deltaLat = 0.06;
+    const deltaLon = 0.09;
+    const params = new URLSearchParams({
+      q: "restaurant",
+      viewbox: `${longitude - deltaLon},${latitude + deltaLat},${longitude + deltaLon},${latitude - deltaLat}`,
+      bounded: "1",
+      format: "jsonv2",
+      addressdetails: "1",
+      extratags: "1",
+      limit: String(MAX_RESULTS),
+    });
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+      headers: { "User-Agent": "Celisafe/1.0 (restaurant discovery; https://celisafe.vercel.app)" },
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!response.ok) throw new Error(`Restaurant lookup returned ${response.status}`);
     const payload = await response.json();
-    const places = (payload.elements ?? []).flatMap((element: {
-      id: number;
-      type: string;
-      lat?: number;
-      lon?: number;
-      center?: { lat: number; lon: number };
-      tags?: Record<string, string>;
+    const places = payload.flatMap((result: {
+      place_id: number;
+      osm_id: number;
+      osm_type: string;
+      lat: string;
+      lon: string;
+      name?: string;
+      display_name?: string;
+      address?: Record<string, string>;
+      extratags?: Record<string, string>;
     }) => {
-      const tags = element.tags ?? {};
-      const lat = element.lat ?? element.center?.lat;
-      const lon = element.lon ?? element.center?.lon;
-      if (!tags.name || !Number.isFinite(lat) || !Number.isFinite(lon)) return [];
+      const name = result.name ?? result.extratags?.name;
+      const lat = Number(result.lat);
+      const lon = Number(result.lon);
+      if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return [];
 
-      const address = [
-        tags["addr:housenumber"],
-        tags["addr:street"],
-        tags["addr:city"],
-      ].filter(Boolean).join(" ");
+      const addressParts = result.address ?? {};
+      const cityName = addressParts.city ?? addressParts.town ?? addressParts.village ?? addressParts.suburb ?? "";
+      const address = [addressParts.house_number, addressParts.road, cityName].filter(Boolean).join(" ");
+      const osmType = result.osm_type === "node" ? "node" : result.osm_type === "way" ? "way" : "relation";
 
       return [{
-        id: `${element.type}-${element.id}`,
-        name: tags.name,
+        id: `osm-${result.place_id}`,
+        name,
         latitude: lat,
         longitude: lon,
-        address,
-        city: tags["addr:city"] ?? "",
-        website_url: tags.website ?? tags["contact:website"] ?? "",
-        cuisine: tags.cuisine ?? "",
-        gluten_free: tags["diet:gluten_free"] ?? "unknown",
-        source_url: `https://www.openstreetmap.org/${element.type}/${element.id}`,
+        address: address || result.display_name || "",
+        city: cityName,
+        website_url: result.extratags?.website ?? "",
+        cuisine: result.extratags?.cuisine ?? "",
+        gluten_free: result.extratags?.["diet:gluten_free"] ?? "unknown",
+        source_url: `https://www.openstreetmap.org/${osmType}/${result.osm_id}`,
         google_rating: null,
         google_review_count: null,
       }];
