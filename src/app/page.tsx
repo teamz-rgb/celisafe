@@ -9,7 +9,7 @@ const RestaurantMap = dynamic(() => import("@/components/RestaurantMap"), {
   loading: () => <div className="grid h-full min-h-[460px] animate-pulse place-items-center rounded-2xl bg-gradient-to-br from-pink-50 via-purple-50 to-sky-50 text-sm font-semibold text-violet-700">Preparing your map…</div>,
 });
 
-interface Restaurant extends Omit<MapRestaurant, "latitude" | "longitude"> {
+interface Restaurant extends Omit<MapRestaurant, "latitude" | "longitude" | "is_discovery"> {
   city: string;
   address: string;
   website_url: string;
@@ -19,6 +19,16 @@ interface Restaurant extends Omit<MapRestaurant, "latitude" | "longitude"> {
   latitude: number | null;
   longitude: number | null;
   created_at: string;
+  is_discovery?: false;
+}
+interface DiscoveredRestaurant extends Omit<Restaurant, "created_at" | "latitude" | "longitude" | "is_discovery"> {
+  latitude: number;
+  longitude: number;
+  is_discovery: true;
+  cuisine: string;
+  gluten_free: string;
+  source_url: string;
+  google_review_count: number | null;
 }
 interface Feedback { id: string; restaurant_id: string; member_name: string; score: number; notes: string }
 type Draft = { score: number; notes: string };
@@ -32,6 +42,7 @@ const initialCenter: Center = { lat: 39.5, lon: -98.35, label: "United States" }
 
 export default function Home() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [discovered, setDiscovered] = useState<DiscoveredRestaurant[]>([]);
   const [feedback, setFeedback] = useState<Feedback[]>([]);
   const [city, setCity] = useState("");
   const [traveler, setTraveler] = useState("");
@@ -39,11 +50,13 @@ export default function Home() {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [form, setForm] = useState({ name: "", city: "", address: "", websiteUrl: "", googleRating: "", yelpRating: "", celiacNotes: "", latitude: "", longitude: "" });
   const [center, setCenter] = useState<Center>(initialCenter);
+  const [userLocation, setUserLocation] = useState<[number, number] | undefined>();
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [lookingUp, setLookingUp] = useState(false);
+  const [findingNearby, setFindingNearby] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -77,7 +90,28 @@ export default function Home() {
       if (!response.ok) throw new Error(result.error ?? "Could not find this city.");
       const nextCenter: Center = { lat: result.latitude, lon: result.longitude, label: result.label };
       setCenter(nextCenter);
+      setUserLocation(undefined);
       setBounds(null);
+      setDiscovered([]);
+      setFindingNearby(true);
+      try {
+        const nearbyResponse = await fetch(`/api/nearby-restaurants?lat=${nextCenter.lat}&lon=${nextCenter.lon}`);
+        const nearbyPayload = await nearbyResponse.json();
+        if (!nearbyResponse.ok) throw new Error(nearbyPayload.error ?? "Could not find nearby restaurants.");
+        setDiscovered(nearbyPayload.map((place: Omit<DiscoveredRestaurant, "is_discovery" | "yelp_rating" | "celiac_notes" | "review_rating" | "created_at">) => ({
+          ...place,
+          is_discovery: true as const,
+          google_rating: place.google_rating ?? null,
+          yelp_rating: null,
+          celiac_notes: "",
+          review_rating: null,
+          google_review_count: place.google_review_count ?? null,
+        })));
+      } catch (nearbyError) {
+        setError(nearbyError instanceof Error ? nearbyError.message : "Could not find nearby restaurants.");
+      } finally {
+        setFindingNearby(false);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not find this city.");
     } finally {
@@ -85,15 +119,50 @@ export default function Home() {
     }
   }, []);
 
-  const mapPlaces = useMemo(() => restaurants
-    .filter((place) => place.latitude !== null && place.longitude !== null)
-    .map((place) => ({ ...place, latitude: Number(place.latitude), longitude: Number(place.longitude) })), [restaurants]);
+  const useMyLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setError("Location services are not supported by this browser.");
+      return;
+    }
+    setLookingUp(true);
+    setError("");
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      const nextCenter = { lat: coords.latitude, lon: coords.longitude, label: "Near you" };
+      setCenter(nextCenter);
+      setUserLocation([coords.latitude, coords.longitude]);
+      setCity("Nearby");
+      setBounds(null);
+      setFindingNearby(true);
+      try {
+        const response = await fetch(`/api/nearby-restaurants?lat=${nextCenter.lat}&lon=${nextCenter.lon}`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error ?? "Could not find nearby restaurants.");
+        setDiscovered(payload.map((place: Omit<DiscoveredRestaurant, "is_discovery" | "yelp_rating" | "celiac_notes" | "review_rating" | "created_at">) => ({ ...place, is_discovery: true as const, google_rating: place.google_rating ?? null, yelp_rating: null, celiac_notes: "", review_rating: null, google_review_count: place.google_review_count ?? null })));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not find nearby restaurants.");
+      } finally {
+        setFindingNearby(false);
+        setLookingUp(false);
+      }
+    }, () => {
+      setError("Location access was unavailable. Check your browser permission or search for a city instead.");
+      setLookingUp(false);
+    }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 300000 });
+  }, []);
+
+  const mapPlaces = useMemo(() => restaurants.flatMap((place) => {
+    if (place.latitude === null || place.longitude === null) return [];
+    return [{ ...place, latitude: Number(place.latitude), longitude: Number(place.longitude) }];
+  }), [restaurants]);
+
+  const allMapPlaces = useMemo(() => {
+    const savedCoordinates = new Set(mapPlaces.map((place) => `${place.latitude.toFixed(5)}:${place.longitude.toFixed(5)}`));
+    return [...mapPlaces, ...discovered.filter((place) => !savedCoordinates.has(`${place.latitude.toFixed(5)}:${place.longitude.toFixed(5)}`))];
+  }, [mapPlaces, discovered]);
 
   const visiblePlaces = useMemo(() => {
-    const query = city.trim().toLocaleLowerCase();
-    return mapPlaces
+    return allMapPlaces
       .filter((place) => {
-        if (query && !place.city.toLocaleLowerCase().includes(query)) return false;
         if (!bounds) return true;
         return place.latitude >= bounds.south && place.latitude <= bounds.north && place.longitude >= bounds.west && place.longitude <= bounds.east;
       })
@@ -104,12 +173,12 @@ export default function Home() {
         const bPublic = Math.max(b.google_rating ?? -1, b.yelp_rating ?? -1);
         return sort === "reviews" ? bPublic - aPublic || bCircle - aCircle : bCircle - aCircle || bPublic - aPublic;
       });
-  }, [mapPlaces, feedback, city, bounds, sort]);
+  }, [allMapPlaces, feedback, bounds, sort]);
 
   const nearbyPlaceIds = useMemo(() => new Set(visiblePlaces.map((place) => place.id)), [visiblePlaces]);
   const unsavedNearby = useMemo(() => mapPlaces.filter((place) => !nearbyPlaceIds.has(place.id) && (!city.trim() || place.city.toLocaleLowerCase().includes(city.trim().toLocaleLowerCase()))), [mapPlaces, nearbyPlaceIds, city]);
   const discoverUrl = `https://www.google.com/maps/search/${encodeURIComponent(`celiac friendly gluten free restaurants ${city.trim() || "restaurants"}`)}`;
-  const mapLink = (place: Restaurant) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${place.name} ${place.address} ${place.city}`)}`;
+  const mapLink = (place: Pick<Restaurant, "name" | "address" | "city">) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${place.name} ${place.address} ${place.city}`)}`;
 
   const addPlace = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setSaving(true); setError(""); setMessage("");
@@ -135,7 +204,7 @@ export default function Home() {
     finally { setSaving(false); }
   };
 
-  const draftFor = (place: Restaurant): Draft => {
+  const draftFor = (place: Pick<Restaurant, "id">): Draft => {
     const saved = feedback.find((entry) => entry.restaurant_id === place.id && entry.member_name === traveler.trim());
     return drafts[place.id] ?? { score: saved?.score ?? 5, notes: saved?.notes ?? "" };
   };
@@ -151,7 +220,34 @@ export default function Home() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save your note."); }
   };
 
-  const reviewLinks = (place: Restaurant) => ({
+  const saveDiscoveredPlace = async (place: DiscoveredRestaurant) => {
+    setError("");
+    try {
+      const response = await fetch("/api/restaurants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: place.name,
+          city: place.city || center.label.split(",")[0],
+          address: place.address,
+          websiteUrl: place.website_url,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          googleRating: place.google_rating ?? "",
+          celiacNotes: place.gluten_free === "yes" ? "OpenStreetMap lists a gluten-free option; confirm celiac-safe preparation directly with the restaurant." : "",
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "Could not save this restaurant.");
+      setRestaurants((current) => [payload, ...current]);
+      setDiscovered((current) => current.filter((candidate) => candidate.id !== place.id));
+      setMessage(`${place.name} was saved to your shared circle.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save this restaurant.");
+    }
+  };
+
+  const reviewLinks = (place: Pick<Restaurant, "name" | "city">) => ({
     google: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${place.name} ${place.city}`)}`,
     yelp: `https://www.yelp.com/search?find_desc=${encodeURIComponent(place.name)}&find_loc=${encodeURIComponent(place.city)}`,
   });
@@ -164,10 +260,10 @@ export default function Home() {
           <p className="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/60 px-3 py-1.5 text-xs font-bold uppercase tracking-[.16em] text-violet-800"><span className="h-2 w-2 rounded-full bg-emerald-400" /> Gluten-free travel, together</p>
           <h1 className="mt-5 text-4xl font-black leading-[1.06] tracking-tight text-slate-900 sm:text-6xl">Good food.<br /><span className="bg-gradient-to-r from-violet-700 via-pink-600 to-sky-600 bg-clip-text text-transparent">Peace of mind.</span></h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-slate-700 sm:text-lg">A shared, feel-good guide to celiac-aware restaurant finds—saved with your circle’s tips, ratings, and links.</p>
-          <a href={discoverUrl} target="_blank" rel="noreferrer" className="mt-7 inline-flex items-center gap-2 rounded-xl bg-violet-700 px-5 py-3.5 text-sm font-bold text-white shadow-lg shadow-violet-900/15 transition hover:-translate-y-0.5 hover:bg-violet-800">Explore places on Google Maps <span aria-hidden="true">↗</span></a>
-          <p className="mt-3 text-xs leading-5 text-slate-600">Open Google Maps to browse external restaurants, then save the ones you want to keep in Celisafe.</p>
+          <a href={discoverUrl} target="_blank" rel="noreferrer" className="mt-7 inline-flex items-center gap-2 rounded-xl bg-violet-700 px-5 py-3.5 text-sm font-bold text-white shadow-lg shadow-violet-900/15 transition hover:-translate-y-0.5 hover:bg-violet-800">Open Google Maps <span aria-hidden="true">↗</span></a>
+          <p className="mt-3 text-xs leading-5 text-slate-600">Nearby restaurant candidates also appear on the map and in the list after a search.</p>
         </div><form onSubmit={(event) => { event.preventDefault(); void searchCity(city); }} className="grid gap-2 rounded-2xl border border-white/80 bg-white/70 p-4 text-sm font-bold text-slate-800 shadow-sm backdrop-blur">
-          <label htmlFor="city-search">Where are you headed?</label><span className="relative"><span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2">⌕</span><input id="city-search" value={city} onChange={(event) => setCity(event.target.value)} placeholder="Type a city or destination" className={`${fieldClass} pl-9`} /></span><button disabled={lookingUp || !city.trim()} className="rounded-xl bg-violet-100 px-4 py-2.5 text-sm font-bold text-violet-900 hover:bg-violet-200 disabled:opacity-50">{lookingUp ? "Finding city…" : "Show this city on the map"}</button><span className="text-xs font-medium text-slate-500">Saved finds appear again whenever you search the same city.</span>
+          <label htmlFor="city-search">Where are you headed?</label><span className="relative"><span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2">⌕</span><input id="city-search" value={city} onChange={(event) => setCity(event.target.value)} placeholder="Type a city or destination" className={`${fieldClass} pl-9`} /></span><button disabled={lookingUp || !city.trim()} className="rounded-xl bg-violet-100 px-4 py-2.5 text-sm font-bold text-violet-900 hover:bg-violet-200 disabled:opacity-50">{lookingUp ? "Finding restaurants…" : "Find restaurants"}</button><button type="button" disabled={lookingUp} onClick={useMyLocation} className="rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-bold text-violet-900 hover:bg-violet-50 disabled:opacity-50">{lookingUp && city === "Nearby" ? "Finding nearby…" : "Use my location"}</button><span className="text-xs font-medium text-slate-500">Location access is requested only when you tap the button. Restaurants and candidates appear below.</span>
         </form></div>
       </section>
 
@@ -175,18 +271,22 @@ export default function Home() {
 
       <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3 px-1"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-violet-700">The map and list work together</p><h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{center.label.split(",")[0] || "Explore places"}</h2><p className="mt-1 text-sm text-slate-600">{visiblePlaces.length} saved {visiblePlaces.length === 1 ? "place" : "places"} in this map area{unsavedNearby.length > 0 ? ` · ${unsavedNearby.length} outside the current view` : ""}</p></div><label className="grid gap-1 text-xs font-semibold text-slate-500">Rank by<select value={sort} onChange={(event) => setSort(event.target.value as "reviews" | "circle")} className="rounded-xl border border-violet-100 bg-white px-3 py-2 text-sm text-slate-800"><option value="reviews">Google / Yelp reviews</option><option value="circle">Our circle ratings</option></select></label></div>
+          <div className="flex flex-wrap items-end justify-between gap-3 px-1"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-violet-700">The map and list work together</p><h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{center.label.split(",")[0] || "Explore places"}</h2><p className="mt-1 text-sm text-slate-600">{visiblePlaces.length} restaurants and saved finds in this map area{unsavedNearby.length > 0 ? ` · ${unsavedNearby.length} saved elsewhere` : ""}</p></div><label className="grid gap-1 text-xs font-semibold text-slate-500">Rank by<select value={sort} onChange={(event) => setSort(event.target.value as "reviews" | "circle")} className="rounded-xl border border-violet-100 bg-white px-3 py-2 text-sm text-slate-800"><option value="reviews">Public and circle scores</option><option value="circle">Our circle ratings</option></select></label></div>
 
           <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-            <div className="h-[460px] overflow-hidden rounded-2xl border border-white shadow-[0_15px_45px_rgba(74,52,95,0.1)]"><RestaurantMap center={[center.lat, center.lon]} places={mapPlaces} selectedId={selectedId} onSelect={setSelectedId} onViewport={setBounds} /></div>
+            <div className="h-[460px] overflow-hidden rounded-2xl border border-white shadow-[0_15px_45px_rgba(74,52,95,0.1)]"><RestaurantMap center={[center.lat, center.lon]} places={allMapPlaces} userLocation={userLocation} selectedId={selectedId} onSelect={setSelectedId} onViewport={setBounds} /></div>
             <div className="max-h-[460px] space-y-3 overflow-y-auto pr-1" aria-label="Restaurants visible in the current map area">
-              {loading ? <div className="rounded-2xl border border-white bg-white/80 p-6 text-sm text-slate-600">Loading your shared places…</div> : visiblePlaces.length === 0 ? <div className="rounded-2xl border border-dashed border-violet-200 bg-white/75 p-7 text-center"><div className="text-3xl" aria-hidden="true">🗺️</div><h3 className="mt-3 font-bold text-slate-900">No saved finds in this view yet</h3><p className="mt-2 text-sm leading-5 text-slate-600">Pan or zoom the map to see saved restaurants there. Add a place using the form, or explore Google Maps.</p><a href={discoverUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-xl bg-violet-100 px-4 py-2 text-sm font-bold text-violet-900 hover:bg-violet-200">Explore options ↗</a></div> : visiblePlaces.map((place, index) => {
-                const placeFeedback = feedback.filter((entry) => entry.restaurant_id === place.id); const average = scoreAverage(placeFeedback); const draft = draftFor(place); const links = reviewLinks(place);
+              {loading ? <div className="rounded-2xl border border-white bg-white/80 p-6 text-sm text-slate-600">Loading your shared places…</div> : findingNearby && visiblePlaces.length === 0 ? <div className="rounded-2xl border border-white bg-white/80 p-6 text-sm text-slate-600">Searching nearby restaurants…</div> : visiblePlaces.length === 0 ? <div className="rounded-2xl border border-dashed border-violet-200 bg-white/75 p-7 text-center"><div className="text-3xl" aria-hidden="true">🗺️</div><h3 className="mt-3 font-bold text-slate-900">No restaurants in this map area yet</h3><p className="mt-2 text-sm leading-5 text-slate-600">Search for a city or use your location. Nearby restaurant candidates will appear here; confirm gluten-free preparation directly with each restaurant.</p><a href={discoverUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-xl bg-violet-100 px-4 py-2 text-sm font-bold text-violet-900 hover:bg-violet-200">Open Google Maps ↗</a></div> : visiblePlaces.map((place, index) => {
+                const isDiscovery = place.is_discovery === true;
+                const placeFeedback = isDiscovery ? [] : feedback.filter((entry) => entry.restaurant_id === place.id); const average = scoreAverage(placeFeedback); const draft = draftFor(place); const links = reviewLinks(place);
                 return <article key={place.id} onMouseEnter={() => setSelectedId(place.id)} onMouseLeave={() => setSelectedId(null)} className={`rounded-2xl border bg-white/95 p-4 shadow-sm transition ${selectedId === place.id ? "border-violet-300 ring-2 ring-violet-100" : "border-white"}`}>
-                  <div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sky-100 text-xs font-black text-sky-800">{index + 1}</span><div className="min-w-0"><h3 className="truncate font-black text-slate-900">{place.name}</h3><p className="mt-0.5 truncate text-xs text-slate-500">{place.address ? `${place.address} · ` : ""}{place.city}</p></div></div><a href={mapLink(place)} target="_blank" rel="noreferrer" aria-label={`Directions to ${place.name}`} className="shrink-0 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-800 hover:bg-sky-100">Directions ↗</a></div>
-                  <div className="mt-3 flex flex-wrap gap-2">{place.google_rating !== null ? <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-800 hover:bg-blue-100"><span aria-label="Google rating">G</span> ★ {place.google_rating.toFixed(1)}</a> : <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100">Google reviews ↗</a>}{place.yelp_rating !== null ? <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100"><span aria-label="Yelp rating">Yelp</span> ★ {place.yelp_rating.toFixed(1)}</a> : <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100">Yelp reviews ↗</a>}<span className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-bold text-violet-800">★ {average !== null ? `${average.toFixed(1)} circle` : "No circle score"}</span></div>
+                  <div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sky-100 text-xs font-black text-sky-800">{index + 1}</span><div className="min-w-0"><h3 className="truncate font-black text-slate-900">{place.name}</h3><p className="mt-0.5 truncate text-xs text-slate-500">{place.address ? `${place.address} · ` : ""}{place.city || center.label.split(",")[0]}</p></div></div><a href={mapLink(place)} target="_blank" rel="noreferrer" aria-label={`Directions to ${place.name}`} className="shrink-0 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-800 hover:bg-sky-100">Directions ↗</a></div>
+                  <div className="mt-3 flex flex-wrap gap-2">{place.google_rating !== null ? <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-800 hover:bg-blue-100"><span aria-label="Google rating">G</span> ★ {place.google_rating.toFixed(1)}{"google_review_count" in place && place.google_review_count ? ` · ${place.google_review_count.toLocaleString()} reviews` : ""}</a> : <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100">Google reviews ↗</a>}{place.yelp_rating !== null ? <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100"><span aria-label="Yelp rating">Yelp</span> ★ {place.yelp_rating.toFixed(1)}</a> : <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100">Yelp reviews ↗</a>}<span className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-bold text-violet-800">★ {average !== null ? `${average.toFixed(1)} circle` : "No circle score"}</span></div>
+                  {"cuisine" in place && place.cuisine && <p className="mt-3 text-xs text-slate-600">Cuisine: {place.cuisine.replaceAll(";", ", ")}</p>}
+                  {isDiscovery && <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs leading-5 text-amber-950">Nearby listing only—not confirmed celiac-safe. Check cross-contact practices directly. No verified public rating is available in this source.</p>}
+                  {isDiscovery && "source_url" in place && <a href={place.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-semibold text-slate-500 underline">View listing source ↗</a>}
                   {place.celiac_notes && <p className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/80 px-3 py-2.5 text-xs leading-5 text-emerald-950">{place.celiac_notes}</p>}
-                  <div className="mt-3 border-t border-slate-100 pt-3"><div className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2"><select aria-label={`Your score for ${place.name}`} value={draft.score} onChange={(event) => setDrafts((current) => ({ ...current, [place.id]: { ...draft, score: Number(event.target.value) } }))} className="rounded-lg border border-violet-100 bg-white px-2 py-2 text-xs text-slate-800">{[5, 4, 3, 2, 1].map((score) => <option key={score} value={score}>★ {score}/5</option>)}</select><input aria-label={`Note for ${place.name}`} value={draft.notes} onChange={(event) => setDrafts((current) => ({ ...current, [place.id]: { ...draft, notes: event.target.value } }))} maxLength={2000} placeholder="Note for the group" className="min-w-0 rounded-lg border border-violet-100 px-2 py-2 text-xs text-slate-800 outline-none focus:border-violet-400" /><button type="button" onClick={() => void saveFeedback(place)} className="rounded-lg bg-pink-100 px-3 py-2 text-xs font-bold text-pink-900 hover:bg-pink-200">Save</button></div>{placeFeedback.filter((entry) => entry.notes).map((entry) => <p key={entry.id} className="mt-2 rounded-lg bg-purple-50 px-2.5 py-2 text-xs text-slate-600"><strong className="text-slate-800">{entry.member_name} · {entry.score}/5:</strong> {entry.notes}</p>)}</div>
+                  {isDiscovery ? <button type="button" onClick={() => void saveDiscoveredPlace(place)} className="mt-3 rounded-lg bg-violet-100 px-3 py-2 text-xs font-bold text-violet-900 hover:bg-violet-200">Save to our circle</button> : <div className="mt-3 border-t border-slate-100 pt-3"><div className="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-2"><select aria-label={`Your score for ${place.name}`} value={draft.score} onChange={(event) => setDrafts((current) => ({ ...current, [place.id]: { ...draft, score: Number(event.target.value) } }))} className="rounded-lg border border-violet-100 bg-white px-2 py-2 text-xs text-slate-800">{[5, 4, 3, 2, 1].map((score) => <option key={score} value={score}>★ {score}/5</option>)}</select><input aria-label={`Note for ${place.name}`} value={draft.notes} onChange={(event) => setDrafts((current) => ({ ...current, [place.id]: { ...draft, notes: event.target.value } }))} maxLength={2000} placeholder="Note for the group" className="min-w-0 rounded-lg border border-violet-100 px-2 py-2 text-xs text-slate-800 outline-none focus:border-violet-400" /><button type="button" onClick={() => void saveFeedback(place)} className="rounded-lg bg-pink-100 px-3 py-2 text-xs font-bold text-pink-900 hover:bg-pink-200">Save</button></div>{placeFeedback.filter((entry) => entry.notes).map((entry) => <p key={entry.id} className="mt-2 rounded-lg bg-purple-50 px-2.5 py-2 text-xs text-slate-600"><strong className="text-slate-800">{entry.member_name} · {entry.score}/5:</strong> {entry.notes}</p>)}</div>}
                 </article>;
               })}
               {!loading && unsavedNearby.length > 0 && <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600"><strong>{unsavedNearby.length} saved elsewhere.</strong> Pan or zoom the map to bring them into the visible list.</div>}

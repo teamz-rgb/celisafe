@@ -13,13 +13,16 @@ Celisafe is a standalone Next.js app for discovering, saving, and sharing celiac
 
 - Search saved places by city and launch a Google Maps discovery search.
 - Browse restaurant links, public review scores, addresses, and map directions.
+- Discover nearby restaurant listings on the map and in a synchronized results list after searching a city or sharing your location.
 - Sort by public reviews or ratings from your circle.
 - Save a per-person 1–5 score and shared notes.
 - Pastel pink, purple, blue, and green responsive design.
 
 ## Data setup and sharing
 
-The schema and open policies are in `supabase-celisafe.sql`. Anyone with the deployed app URL can access the shared collection; this is intentional for the community-circle use case. The app uses the Supabase anon key and row-level security policies from the SQL file. Never expose a Supabase service-role key in a `NEXT_PUBLIC_` variable.
+The schema and open policies are in `supabase-celisafe.sql`. Anyone with the deployed app URL can access the shared collection; this is intentional for the community-circle use case. The app uses the Supabase anon/publishable key and row-level security policies from the SQL file. Never expose a Supabase service-role or secret key in a `NEXT_PUBLIC_` variable.
+
+Nearby search uses OpenStreetMap/Overpass when no ratings provider is configured. Those listings are candidates only; they do not guarantee gluten-free or celiac-safe preparation and do not include public ratings. To show Google Places star ratings and review counts, configure a restricted Google Places API key as the server-only `GOOGLE_PLACES_API_KEY` environment variable in Vercel and locally. Do not use a `NEXT_PUBLIC_` prefix for this key. Google Places usage may incur charges; set API restrictions and billing budgets in Google Cloud. The user's location is requested only after they choose **Use my location**.
 
 ## Deploy
 
