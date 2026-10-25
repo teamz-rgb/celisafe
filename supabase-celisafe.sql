@@ -2,6 +2,7 @@ create table if not exists public.travel_restaurants (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   city text not null,
+  cuisine text not null default '',
   address text not null default '',
   website_url text not null default '',
   google_rating numeric(2, 1) check (google_rating is null or (google_rating >= 0 and google_rating <= 5)),
@@ -15,6 +16,7 @@ create table if not exists public.travel_restaurants (
 );
 
 alter table public.travel_restaurants add column if not exists google_rating numeric(2, 1);
+alter table public.travel_restaurants add column if not exists cuisine text not null default '';
 alter table public.travel_restaurants add column if not exists yelp_rating numeric(2, 1);
 alter table public.travel_restaurants add column if not exists latitude double precision;
 alter table public.travel_restaurants add column if not exists longitude double precision;

@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
         city,
         address: typeof body.address === "string" ? body.address.trim() : "",
         website_url: typeof body.websiteUrl === "string" ? body.websiteUrl.trim() : "",
+        cuisine: typeof body.cuisine === "string" ? body.cuisine.trim() : "",
         google_rating: googleRating,
         yelp_rating: yelpRating,
         review_rating: rating,

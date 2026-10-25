@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo } from "react";
 import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
-import type { LatLngBoundsExpression, LatLngExpression } from "leaflet";
+import type { LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 export interface MapRestaurant {
@@ -37,11 +37,12 @@ function ViewportListener({ onViewport }: Pick<RestaurantMapProps, "onViewport">
   return null;
 }
 
-function RecenterMap({ center }: { center: LatLngExpression }) {
+function RecenterMap({ center }: { center: [number, number] }) {
   const map = useMap();
+  const [latitude, longitude] = center;
   useEffect(() => {
-    map.flyTo(center, 12, { duration: 0.8 });
-  }, [center, map]);
+    map.flyTo([latitude, longitude], map.getZoom(), { duration: 0.8 });
+  }, [latitude, longitude, map]);
   return null;
 }
 

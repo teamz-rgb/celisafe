@@ -16,6 +16,7 @@ interface Restaurant extends Omit<MapRestaurant, "latitude" | "longitude" | "is_
   google_rating: number | null;
   yelp_rating: number | null;
   celiac_notes: string;
+  cuisine: string;
   latitude: number | null;
   longitude: number | null;
   created_at: string;
@@ -39,6 +40,23 @@ const nameKey = "celisafe-traveler-name";
 const fieldClass = "w-full rounded-xl border border-violet-100 bg-white/90 px-4 py-3 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-violet-400 focus:ring-4 focus:ring-violet-100";
 const scoreAverage = (entries: Feedback[]) => entries.length ? entries.reduce((sum, entry) => sum + entry.score, 0) / entries.length : null;
 const initialCenter: Center = { lat: 39.5, lon: -98.35, label: "United States" };
+const cuisineLabel = (value: string) => {
+  const normalized = value.toLocaleLowerCase();
+  if (normalized.includes("seafood") || normalized.includes("sea food") || normalized.includes("fish")) return "Seafood";
+  if (normalized.includes("italian")) return "Italian";
+  if (normalized.includes("american")) return "American";
+  if (normalized.includes("mexican")) return "Mexican";
+  if (normalized.includes("chinese")) return "Chinese";
+  if (normalized.includes("japanese") || normalized.includes("sushi")) return "Japanese";
+  if (normalized.includes("thai")) return "Thai";
+  if (normalized.includes("indian")) return "Indian";
+  if (normalized.includes("french")) return "French";
+  if (normalized.includes("mediterranean")) return "Mediterranean";
+  if (normalized.includes("korean")) return "Korean";
+  if (normalized.includes("cafe") || normalized.includes("coffee")) return "Cafe";
+  if (!value.trim()) return "Other / not listed";
+  return value.split(/[;,/]/)[0].trim().replace(/\b\w/g, (letter) => letter.toLocaleUpperCase());
+};
 
 export default function Home() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -47,8 +65,9 @@ export default function Home() {
   const [city, setCity] = useState("");
   const [traveler, setTraveler] = useState("");
   const [sort, setSort] = useState<"reviews" | "circle">("reviews");
+  const [cuisineFilter, setCuisineFilter] = useState("All cuisines");
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
-  const [form, setForm] = useState({ name: "", city: "", address: "", websiteUrl: "", googleRating: "", yelpRating: "", celiacNotes: "", latitude: "", longitude: "" });
+  const [form, setForm] = useState({ name: "", city: "", address: "", websiteUrl: "", cuisine: "", googleRating: "", yelpRating: "", celiacNotes: "", latitude: "", longitude: "" });
   const [center, setCenter] = useState<Center>(initialCenter);
   const [userLocation, setUserLocation] = useState<[number, number] | undefined>();
   const [bounds, setBounds] = useState<Bounds | null>(null);
@@ -163,6 +182,7 @@ export default function Home() {
   const visiblePlaces = useMemo(() => {
     return allMapPlaces
       .filter((place) => {
+        if (cuisineFilter !== "All cuisines" && cuisineLabel(place.cuisine ?? "") !== cuisineFilter) return false;
         if (!bounds) return true;
         return place.latitude >= bounds.south && place.latitude <= bounds.north && place.longitude >= bounds.west && place.longitude <= bounds.east;
       })
@@ -173,7 +193,12 @@ export default function Home() {
         const bPublic = Math.max(b.google_rating ?? -1, b.yelp_rating ?? -1);
         return sort === "reviews" ? bPublic - aPublic || bCircle - aCircle : bCircle - aCircle || bPublic - aPublic;
       });
-  }, [allMapPlaces, feedback, bounds, sort]);
+  }, [allMapPlaces, feedback, bounds, sort, cuisineFilter]);
+
+  const cuisineOptions = useMemo(() => [
+    "All cuisines",
+    ...Array.from(new Set(allMapPlaces.map((place) => cuisineLabel(place.cuisine ?? "")))).sort((a, b) => a.localeCompare(b)),
+  ], [allMapPlaces]);
 
   const nearbyPlaceIds = useMemo(() => new Set(visiblePlaces.map((place) => place.id)), [visiblePlaces]);
   const unsavedNearby = useMemo(() => mapPlaces.filter((place) => !nearbyPlaceIds.has(place.id) && (!city.trim() || place.city.toLocaleLowerCase().includes(city.trim().toLocaleLowerCase()))), [mapPlaces, nearbyPlaceIds, city]);
@@ -198,7 +223,7 @@ export default function Home() {
       if (payload.latitude !== null && payload.longitude !== null) {
         setCenter({ lat: Number(payload.latitude), lon: Number(payload.longitude), label: payload.city }); setBounds(null);
       }
-      setForm({ name: "", city: "", address: "", websiteUrl: "", googleRating: "", yelpRating: "", celiacNotes: "", latitude: "", longitude: "" });
+      setForm({ name: "", city: "", address: "", websiteUrl: "", cuisine: "", googleRating: "", yelpRating: "", celiacNotes: "", latitude: "", longitude: "" });
       setMessage("Saved and shared with your circle!");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save restaurant."); }
     finally { setSaving(false); }
@@ -231,6 +256,7 @@ export default function Home() {
           city: place.city || center.label.split(",")[0],
           address: place.address,
           websiteUrl: place.website_url,
+          cuisine: place.cuisine,
           latitude: place.latitude,
           longitude: place.longitude,
           googleRating: place.google_rating ?? "",
@@ -271,18 +297,18 @@ export default function Home() {
 
       <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3 px-1"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-violet-700">The map and list work together</p><h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{center.label.split(",")[0] || "Explore places"}</h2><p className="mt-1 text-sm text-slate-600">{visiblePlaces.length} restaurants and saved finds in this map area{unsavedNearby.length > 0 ? ` · ${unsavedNearby.length} saved elsewhere` : ""}</p></div><label className="grid gap-1 text-xs font-semibold text-slate-500">Rank by<select value={sort} onChange={(event) => setSort(event.target.value as "reviews" | "circle")} className="rounded-xl border border-violet-100 bg-white px-3 py-2 text-sm text-slate-800"><option value="reviews">Public and circle scores</option><option value="circle">Our circle ratings</option></select></label></div>
+          <div className="flex flex-wrap items-end justify-between gap-3 px-1"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-violet-700">The map and list work together</p><h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{center.label.split(",")[0] || "Explore places"}</h2><p className="mt-1 text-sm text-slate-600">{visiblePlaces.length} restaurants and saved finds in this map area{unsavedNearby.length > 0 ? ` · ${unsavedNearby.length} saved elsewhere` : ""}</p></div><div className="flex flex-wrap gap-2"><label className="grid gap-1 text-xs font-semibold text-slate-500">Cuisine<select value={cuisineFilter} onChange={(event) => setCuisineFilter(event.target.value)} className="rounded-xl border border-violet-100 bg-white px-3 py-2 text-sm text-slate-800">{cuisineOptions.map((option) => <option key={option}>{option}</option>)}</select></label><label className="grid gap-1 text-xs font-semibold text-slate-500">Rank by<select value={sort} onChange={(event) => setSort(event.target.value as "reviews" | "circle")} className="rounded-xl border border-violet-100 bg-white px-3 py-2 text-sm text-slate-800"><option value="reviews">Public and circle scores</option><option value="circle">Our circle ratings</option></select></label></div></div>
 
           <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-            <div className="h-[460px] overflow-hidden rounded-2xl border border-white shadow-[0_15px_45px_rgba(74,52,95,0.1)]"><RestaurantMap center={[center.lat, center.lon]} places={allMapPlaces} userLocation={userLocation} selectedId={selectedId} onSelect={setSelectedId} onViewport={setBounds} /></div>
-            <div className="max-h-[460px] space-y-3 overflow-y-auto pr-1" aria-label="Restaurants visible in the current map area">
+            <div className="h-[360px] overflow-hidden rounded-2xl border border-white shadow-[0_15px_45px_rgba(74,52,95,0.1)] 2xl:sticky 2xl:top-24 2xl:h-[460px] 2xl:self-start"><RestaurantMap center={[center.lat, center.lon]} places={allMapPlaces} userLocation={userLocation} selectedId={selectedId} onSelect={setSelectedId} onViewport={setBounds} /></div>
+            <div className="space-y-3 pr-1" aria-label="Restaurants visible in the current map area">
               {loading ? <div className="rounded-2xl border border-white bg-white/80 p-6 text-sm text-slate-600">Loading your shared places…</div> : findingNearby && visiblePlaces.length === 0 ? <div className="rounded-2xl border border-white bg-white/80 p-6 text-sm text-slate-600">Searching nearby restaurants…</div> : visiblePlaces.length === 0 ? <div className="rounded-2xl border border-dashed border-violet-200 bg-white/75 p-7 text-center"><div className="text-3xl" aria-hidden="true">🗺️</div><h3 className="mt-3 font-bold text-slate-900">No restaurants in this map area yet</h3><p className="mt-2 text-sm leading-5 text-slate-600">Search for a city or use your location. Nearby restaurant candidates will appear here; confirm gluten-free preparation directly with each restaurant.</p><a href={discoverUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex rounded-xl bg-violet-100 px-4 py-2 text-sm font-bold text-violet-900 hover:bg-violet-200">Open Google Maps ↗</a></div> : visiblePlaces.map((place, index) => {
                 const isDiscovery = place.is_discovery === true;
                 const placeFeedback = isDiscovery ? [] : feedback.filter((entry) => entry.restaurant_id === place.id); const average = scoreAverage(placeFeedback); const draft = draftFor(place); const links = reviewLinks(place);
                 return <article key={place.id} onMouseEnter={() => setSelectedId(place.id)} onMouseLeave={() => setSelectedId(null)} className={`rounded-2xl border bg-white/95 p-4 shadow-sm transition ${selectedId === place.id ? "border-violet-300 ring-2 ring-violet-100" : "border-white"}`}>
                   <div className="flex items-start justify-between gap-3"><div className="flex min-w-0 gap-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-sky-100 text-xs font-black text-sky-800">{index + 1}</span><div className="min-w-0"><h3 className="truncate font-black text-slate-900">{place.name}</h3><p className="mt-0.5 truncate text-xs text-slate-500">{place.address ? `${place.address} · ` : ""}{place.city || center.label.split(",")[0]}</p></div></div><a href={mapLink(place)} target="_blank" rel="noreferrer" aria-label={`Directions to ${place.name}`} className="shrink-0 rounded-lg bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-800 hover:bg-sky-100">Directions ↗</a></div>
                   <div className="mt-3 flex flex-wrap gap-2">{place.google_rating !== null ? <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-bold text-blue-800 hover:bg-blue-100"><span aria-label="Google rating">G</span> ★ {place.google_rating.toFixed(1)}{"google_review_count" in place && place.google_review_count ? ` · ${place.google_review_count.toLocaleString()} reviews` : ""}</a> : <a href={links.google} target="_blank" rel="noreferrer" className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-100">Google reviews ↗</a>}{place.yelp_rating !== null ? <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100"><span aria-label="Yelp rating">Yelp</span> ★ {place.yelp_rating.toFixed(1)}</a> : <a href={links.yelp} target="_blank" rel="noreferrer" className="rounded-lg bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-100">Yelp reviews ↗</a>}<span className="rounded-lg bg-violet-50 px-2.5 py-1.5 text-xs font-bold text-violet-800">★ {average !== null ? `${average.toFixed(1)} circle` : "No circle score"}</span></div>
-                  {"cuisine" in place && place.cuisine && <p className="mt-3 text-xs text-slate-600">Cuisine: {place.cuisine.replaceAll(";", ", ")}</p>}
+                  {place.cuisine && <p className="mt-3 text-xs text-slate-600">Cuisine: {place.cuisine.replaceAll(";", ", ")}</p>}
                   {isDiscovery && <p className="mt-3 rounded-xl border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs leading-5 text-amber-950">Nearby listing only—not confirmed celiac-safe. Check cross-contact practices directly. No verified public rating is available in this source.</p>}
                   {isDiscovery && "source_url" in place && <a href={place.source_url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-xs font-semibold text-slate-500 underline">View listing source ↗</a>}
                   {place.celiac_notes && <p className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/80 px-3 py-2.5 text-xs leading-5 text-emerald-950">{place.celiac_notes}</p>}
